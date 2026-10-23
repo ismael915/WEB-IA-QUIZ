@@ -223,7 +223,7 @@
 				<div class="rank-head"><h2 id="ranking-title">Ranking</h2><span>↗</span></div>
 				<p class="rank-caption">As melhores equipes aparecem primeiro. Em caso de empate, vence quem concluiu em menos tempo.</p>
 				<ol id="home-ranking" class="ranking"></ol>
-				<div class="rank-foot">recordes salvos neste dispositivo</div>
+				<div class="rank-foot">ranking compartilhado da turma</div>
 			</aside>
 		</section>
 
@@ -290,7 +290,9 @@
 			{ level: 'Difícil', points: 3, question: 'Qual sequência representa melhor um ciclo cuidadoso de criação de um site?', options: ['Planejar, estruturar, implementar, testar, revisar e publicar', 'Publicar, planejar, apagar, testar e começar o conteúdo', 'Escolher a hospedagem, publicar e dispensar validação', 'Gerar todo o código com IA e não revisar'], answer: 0, explanation: 'Planejamento, implementação, testes e revisão ajudam a entregar um site mais útil e confiável.' }
 		];
 
-		const STORAGE_KEY = 'web-ia-quiz-ranking-v1';
+		const SUPABASE_URL = 'https://SEU-PROJETO.supabase.co';
+		const SUPABASE_ANON_KEY = 'SUA_CHAVE_ANON_PUBLICA';
+		const RANKING_LIMIT = 100;
 		const home = document.querySelector('#home');
 		const quiz = document.querySelector('#quiz');
 		const result = document.querySelector('#result');
@@ -315,37 +317,73 @@
 			return `${minutes}:${seconds}`;
 		}
 
-		function getRanking() {
-			try {
-				const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-				return Array.isArray(data) ? data : [];
-			} catch {
-				return [];
-			}
+		function isSupabaseConfigured() {
+			return !SUPABASE_URL.includes('SEU-PROJETO')
+				&& !SUPABASE_ANON_KEY.includes('SUA_CHAVE_ANON_PUBLICA');
 		}
 
-		function saveRanking(entry) {
-			const ranking = getRanking();
-			ranking.push(entry);
-			ranking.sort((a, b) => b.score - a.score || a.time - b.time || a.name.localeCompare(b.name, 'pt-BR'));
-			const trimmed = ranking.slice(0, 10);
-			try {
-				localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-			} catch {
-				return trimmed;
-			}
-			return trimmed;
+		function supabaseHeaders(extra = {}) {
+			return {
+				apikey: SUPABASE_ANON_KEY,
+				Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+				...extra
+			};
 		}
 
-		function renderRanking(target) {
-			const ranking = getRanking();
+		async function getRanking() {
+			const params = new URLSearchParams({
+				select: 'id,team_name,score,elapsed_seconds',
+				order: 'score.desc,elapsed_seconds.asc,created_at.asc',
+				limit: String(RANKING_LIMIT)
+			});
+			const response = await fetch(`${SUPABASE_URL}/rest/v1/quiz_scores?${params}`, {
+				headers: supabaseHeaders()
+			});
+			if (!response.ok) throw new Error('Não foi possível consultar o ranking.');
+			return response.json();
+		}
+
+		async function saveRanking(entry) {
+			const response = await fetch(`${SUPABASE_URL}/rest/v1/quiz_scores`, {
+				method: 'POST',
+				headers: supabaseHeaders({
+					'Content-Type': 'application/json',
+					Prefer: 'return=representation'
+				}),
+				body: JSON.stringify({
+					team_name: entry.name,
+					score: entry.score,
+					elapsed_seconds: entry.time
+				})
+			});
+			if (!response.ok) throw new Error('Não foi possível salvar o resultado.');
+			const [savedEntry] = await response.json();
+			if (!savedEntry) throw new Error('O banco não confirmou o resultado.');
+			return savedEntry;
+		}
+
+		async function renderRanking(target) {
 			target.replaceChildren();
-			if (!ranking.length) {
+			const showMessage = message => {
 				const empty = document.createElement('li');
 				empty.className = 'empty-rank';
-				empty.textContent = 'Ainda não há resultados. Seja a primeira equipe a entrar no placar.';
+				empty.textContent = message;
 				target.append(empty);
-				return;
+			};
+			if (!isSupabaseConfigured()) {
+				showMessage('Conecte o projeto Supabase para ativar o ranking compartilhado.');
+				return [];
+			}
+			let ranking;
+			try {
+				ranking = await getRanking();
+			} catch {
+				showMessage('Não foi possível carregar o ranking. Confira a configuração do Supabase.');
+				return null;
+			}
+			if (!ranking.length) {
+				showMessage('Ainda não há equipes no ranking. Seja a primeira a jogar!');
+				return ranking;
 			}
 			ranking.slice(0, 5).forEach((entry, index) => {
 				const row = document.createElement('li');
@@ -355,13 +393,14 @@
 				position.textContent = String(index + 1).padStart(2, '0');
 				const name = document.createElement('span');
 				name.className = 'rank-name';
-				name.textContent = entry.name;
+				name.textContent = entry.team_name;
 				const points = document.createElement('span');
 				points.className = 'rank-score';
-				points.textContent = `${entry.score} pts · ${formatTime(entry.time)}`;
+				points.textContent = `${entry.score} pts · ${formatTime(entry.elapsed_seconds)}`;
 				row.append(position, name, points);
 				target.append(row);
 			});
+			return ranking;
 		}
 
 		function startQuiz(name) {
@@ -446,19 +485,36 @@
 			nextBtn.focus();
 		}
 
-		function finishQuiz() {
+		async function finishQuiz() {
 			clearInterval(timerInterval);
 			quiz.hidden = true;
 			result.hidden = false;
-			const ranking = saveRanking({ name: teamName, score, time: secondsElapsed });
-			const place = ranking.findIndex(entry => entry.name === teamName && entry.score === score && entry.time === secondsElapsed) + 1;
 			document.querySelector('#result-title').textContent = score === 30 ? 'Perfeito. Que rodada!' : score >= 20 ? 'Mandaram muito bem.' : score >= 10 ? 'Boa rodada, equipe.' : 'Desafio concluído.';
 			document.querySelector('#result-copy').textContent = `${teamName}, este foi o resultado da equipe no desafio de programação web com inteligência artificial.`;
 			document.querySelector('#final-score').textContent = `${score}/30`;
 			document.querySelector('#final-time').textContent = formatTime(secondsElapsed);
 			document.querySelector('#final-correct').textContent = `${correctCount}/15`;
-			document.querySelector('#result-rank').innerHTML = `<span>Posição no ranking local: <strong>${place ? `#${place}` : 'resultado salvo'}</strong></span>`;
-			renderRanking(document.querySelector('#home-ranking'));
+			const rankResult = document.querySelector('#result-rank');
+			if (!isSupabaseConfigured()) {
+				rankResult.textContent = 'O resultado não foi compartilhado. Configure o Supabase para ativar o ranking da turma.';
+				return;
+			}
+			rankResult.textContent = 'Salvando resultado no ranking compartilhado...';
+			try {
+				const savedEntry = await saveRanking({ name: teamName, score, time: secondsElapsed });
+				const ranking = await renderRanking(document.querySelector('#home-ranking'));
+				if (ranking === null) {
+					rankResult.textContent = 'Resultado compartilhado, mas não foi possível carregar a posição no ranking.';
+				} else {
+					const place = ranking.findIndex(entry => entry.id === savedEntry.id);
+					rankResult.textContent = place >= 0
+						? `Resultado compartilhado. Posição no ranking: #${place + 1}.`
+						: 'Resultado compartilhado; a equipe está fora das 100 primeiras posições.';
+				}
+			} catch {
+				rankResult.textContent = 'Não foi possível compartilhar o resultado. Confira a conexão com o Supabase.';
+				await renderRanking(document.querySelector('#home-ranking'));
+			}
 		}
 
 		form.addEventListener('submit', event => {
