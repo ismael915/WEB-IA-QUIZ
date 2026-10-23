@@ -94,6 +94,17 @@
 		.rank-score { color: var(--lime); font: 11px var(--mono); white-space: nowrap; }
 		.empty-rank { padding: 16px 4px; color: var(--muted); font-size: 11px; line-height: 1.65; }
 		.rank-foot { margin-top: 16px; padding-top: 13px; color: #78847b; border-top: 1px solid var(--line); font: 9px var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+		.setup-guide { margin-top: 22px; padding: 17px 19px; border: 1px solid var(--line); background: #18231fdd; }
+		.setup-guide summary { color: var(--lime); font-size: 13px; font-weight: 700; cursor: pointer; }
+		.setup-content { max-width: 850px; padding-top: 12px; color: #b7c0b8; font-size: 12px; line-height: 1.7; }
+		.setup-content ol { padding-left: 20px; }
+		.setup-content li + li { margin-top: 5px; }
+		.setup-content code { color: var(--mint); font-family: var(--mono); font-size: 11px; }
+		.setup-sql-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 15px; }
+		.setup-sql-head strong { color: var(--ink); font-size: 12px; }
+		.copy-sql { padding: 7px 10px; color: var(--ink); border: 1px solid #526057; border-radius: 2px; background: transparent; font-size: 11px; cursor: pointer; }
+		.copy-sql:hover { border-color: var(--mint); }
+		.setup-sql { max-height: 330px; overflow: auto; margin: 9px 0 0; padding: 13px; color: #d4ddd4; border: 1px solid var(--line); background: #101a16; font: 10px/1.6 var(--mono); white-space: pre; }
 
 		.quiz-layout { display: grid; grid-template-columns: minmax(0, 1fr) 245px; gap: 34px; align-items: start; }
 		.quiz-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 17px; }
@@ -227,6 +238,50 @@
 			</aside>
 		</section>
 
+		<details id="supabase-guide" class="setup-guide" hidden>
+			<summary>Configurar ranking compartilhado</summary>
+			<div class="setup-content">
+				<p>O ranking só é compartilhado depois de conectar um projeto Supabase. A criação do banco é manual para manter a chave administrativa protegida.</p>
+				<ol>
+					<li>Crie um projeto em <a href="https://supabase.com/" target="_blank" rel="noreferrer">supabase.com</a>.</li>
+					<li>No painel do projeto, abra o SQL Editor e execute o script abaixo.</li>
+					<li>Em Project Settings &gt; API, copie a Project URL e a chave pública <code>anon</code> ou <code>publishable</code>.</li>
+					<li>No final deste HTML, substitua <code>https://SEU-PROJETO.supabase.co</code> e <code>SUA_CHAVE_ANON_PUBLICA</code> pelos valores do seu projeto; publique o arquivo atualizado.</li>
+				</ol>
+				<p>Não coloque a chave <code>service_role</code> neste arquivo. Como os resultados são enviados pelo navegador, o ranking é adequado para atividades de turma, mas não impede fraude deliberada.</p>
+				<div class="setup-sql-head"><strong>SQL de configuração</strong><button id="copy-sql" class="copy-sql" type="button">Copiar SQL</button></div>
+				<pre class="setup-sql"><code id="supabase-sql">create table if not exists public.quiz_scores (
+  id uuid primary key default gen_random_uuid(),
+  team_name text not null check (char_length(btrim(team_name)) between 1 and 32),
+  score smallint not null check (score between 0 and 30),
+  elapsed_seconds integer not null check (elapsed_seconds between 0 and 86400),
+  created_at timestamptz not null default now()
+);
+
+alter table public.quiz_scores enable row level security;
+
+grant select, insert on public.quiz_scores to anon, authenticated;
+
+drop policy if exists "Anyone can read quiz scores" on public.quiz_scores;
+create policy "Anyone can read quiz scores"
+  on public.quiz_scores
+  for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists "Anyone can submit quiz scores" on public.quiz_scores;
+create policy "Anyone can submit quiz scores"
+  on public.quiz_scores
+  for insert
+  to anon, authenticated
+  with check (
+    char_length(btrim(team_name)) between 1 and 32
+    and score between 0 and 30
+    and elapsed_seconds between 0 and 86400
+  );</code></pre>
+			</div>
+		</details>
+
 		<section id="quiz" class="quiz-layout" aria-labelledby="question-title" hidden>
 			<div>
 				<div class="quiz-top"><span id="team-tag" class="team-tag"></span><span id="timer" class="timer" aria-live="off">00:00</span></div>
@@ -290,9 +345,10 @@
 			{ level: 'Difícil', points: 3, question: 'Qual sequência representa melhor um ciclo cuidadoso de criação de um site?', options: ['Planejar, estruturar, implementar, testar, revisar e publicar', 'Publicar, planejar, apagar, testar e começar o conteúdo', 'Escolher a hospedagem, publicar e dispensar validação', 'Gerar todo o código com IA e não revisar'], answer: 0, explanation: 'Planejamento, implementação, testes e revisão ajudam a entregar um site mais útil e confiável.' }
 		];
 
-		const SUPABASE_URL = 'https://SEU-PROJETO.supabase.co';
-		const SUPABASE_ANON_KEY = 'SUA_CHAVE_ANON_PUBLICA';
+		const SUPABASE_URL = 'https://lyohwnhllaygihwnawka.supabase.co';
+		const SUPABASE_ANON_KEY = 'sb_publishable_P22O1ZgrRAAqifpAy3wp9A_VZQgiY1c';
 		const RANKING_LIMIT = 100;
+		const setupGuide = document.querySelector('#supabase-guide');
 		const home = document.querySelector('#home');
 		const quiz = document.querySelector('#quiz');
 		const result = document.querySelector('#result');
@@ -325,7 +381,6 @@
 		function supabaseHeaders(extra = {}) {
 			return {
 				apikey: SUPABASE_ANON_KEY,
-				Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
 				...extra
 			};
 		}
@@ -546,6 +601,21 @@
 		});
 
 		renderRanking(document.querySelector('#home-ranking'));
+		setupGuide.hidden = isSupabaseConfigured();
+		document.querySelector('#copy-sql').addEventListener('click', async event => {
+			const button = event.currentTarget;
+			try {
+				await navigator.clipboard.writeText(document.querySelector('#supabase-sql').textContent);
+				button.textContent = 'SQL copiado';
+			} catch {
+				const range = document.createRange();
+				range.selectNodeContents(document.querySelector('#supabase-sql'));
+				const selection = window.getSelection();
+				selection.removeAllRanges();
+				selection.addRange(range);
+				button.textContent = 'SQL selecionado; use Ctrl+C';
+			}
+		});
 	</script>
 </body>
 </html>
